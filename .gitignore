@@ -22,3 +22,6 @@ issues.db
 # IDE files
 .vscode/
 .cursor/
+
+# Local logs
+*.log

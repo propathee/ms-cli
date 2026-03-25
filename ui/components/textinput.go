@@ -2,10 +2,12 @@ package components
 
 import (
 	"strings"
+	"unicode"
 
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	rw "github.com/mattn/go-runewidth"
 	"github.com/vigo999/ms-cli/ui/slash"
 )
 
@@ -17,13 +19,16 @@ var (
 )
 
 const maxVisibleSuggestions = 8
+const maxVisibleInputRows = 6
+const composerPrompt = "❯ "
 
-// TextInput wraps the bubbles text input for the chat prompt.
+// TextInput wraps the bubbles textarea for the chat prompt.
 type TextInput struct {
-	Model            textinput.Model
+	Model            textarea.Model
 	slashRegistry    *slash.Registry
 	showSuggestions  bool
 	slashMode        bool // true once suggestions have been shown, until submit/esc
+	slashDismissed   bool
 	suggestions      []string
 	selectedIdx      int
 	suggestionOffset int
@@ -32,13 +37,26 @@ type TextInput struct {
 	historyDraft     string
 }
 
-// NewTextInput creates a focused text input with "> " prompt.
+// NewTextInput creates a focused composer with "? " prompt.
 func NewTextInput() TextInput {
-	ti := textinput.New()
-	ti.Prompt = "❯ "
+	ti := textarea.New()
+	ti.Prompt = composerPrompt
 	ti.Placeholder = ""
-	ti.Focus()
 	ti.CharLimit = 2000
+	ti.ShowLineNumbers = false
+	ti.SetPromptFunc(lipgloss.Width(composerPrompt), func(lineIdx int) string {
+		if lineIdx == 0 {
+			return composerPrompt
+		}
+		return strings.Repeat(" ", lipgloss.Width(composerPrompt))
+	})
+	focused, blurred := textarea.DefaultStyles()
+	focused.CursorLine = lipgloss.NewStyle()
+	blurred.CursorLine = lipgloss.NewStyle()
+	ti.FocusedStyle = focused
+	ti.BlurredStyle = blurred
+	ti.Focus()
+	ti.SetHeight(1)
 	return TextInput{
 		Model:         ti,
 		slashRegistry: slash.DefaultRegistry,
@@ -51,11 +69,21 @@ func (t TextInput) Value() string {
 	return t.Model.Value()
 }
 
+// InsertText inserts text into the composer while keeping layout and suggestions in sync.
+func (t TextInput) InsertText(text string) TextInput {
+	t.Model.InsertString(text)
+	t.syncLayout()
+	t.updateSuggestions()
+	return t
+}
+
 // Reset clears the input.
 func (t TextInput) Reset() TextInput {
 	t.Model.Reset()
+	t.syncLayout()
 	t.showSuggestions = false
-	// Keep slashMode — it gets cleared when the command result arrives.
+	t.slashDismissed = false
+	// Keep slashMode бк it gets cleared when the command result arrives.
 	t.suggestions = nil
 	t.selectedIdx = 0
 	t.suggestionOffset = 0
@@ -67,6 +95,7 @@ func (t TextInput) Reset() TextInput {
 // Focus gives the input focus.
 func (t TextInput) Focus() (TextInput, tea.Cmd) {
 	cmd := t.Model.Focus()
+	t.syncLayout()
 	return t, cmd
 }
 
@@ -81,7 +110,8 @@ func (t TextInput) SetWidth(width int) TextInput {
 	if width < 1 {
 		width = 1
 	}
-	t.Model.Width = width
+	t.Model.SetWidth(width)
+	t.syncLayout()
 	return t
 }
 
@@ -89,6 +119,13 @@ func (t TextInput) SetWidth(width int) TextInput {
 func (t TextInput) Update(msg tea.Msg) (TextInput, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if t.historyIndex != -1 && keyEditsInput(msg) {
+			t.historyIndex = -1
+		}
+		if keyEditsInput(msg) {
+			t.slashDismissed = false
+		}
+
 		// Handle slash command suggestions navigation
 		if t.showSuggestions && len(t.suggestions) > 0 {
 			switch msg.String() {
@@ -110,21 +147,27 @@ func (t TextInput) Update(msg tea.Msg) (TextInput, tea.Cmd) {
 				}
 				t.syncSuggestionWindow()
 				return t, nil
-			case "tab", "enter":
+			case "tab":
 				// Accept selected suggestion
 				if t.selectedIdx < len(t.suggestions) {
 					val := t.suggestions[t.selectedIdx] + " "
 					t.Model.SetValue(val)
-					t.Model.SetCursor(len(val))
+					t.Model.SetCursor(len([]rune(val)))
+					t.syncLayout()
 					t.showSuggestions = false
+					t.slashMode = false
 					t.suggestions = nil
 					t.suggestionOffset = 0
 				}
+				return t, nil
+			case "enter":
+				// Let the app decide whether enter should submit the current slash command.
 				return t, nil
 			case "esc":
 				// Cancel suggestions
 				t.showSuggestions = false
 				t.slashMode = false
+				t.slashDismissed = true
 				t.suggestions = nil
 				t.suggestionOffset = 0
 				return t, nil
@@ -134,6 +177,7 @@ func (t TextInput) Update(msg tea.Msg) (TextInput, tea.Cmd) {
 
 	m, cmd := t.Model.Update(msg)
 	t.Model = m
+	t.syncLayout()
 
 	// Update suggestions based on current input
 	t.updateSuggestions()
@@ -141,7 +185,7 @@ func (t TextInput) Update(msg tea.Msg) (TextInput, tea.Cmd) {
 	return t, cmd
 }
 
-// PushHistory stores a submitted input line for later up/down recall.
+// PushHistory stores a submitted input line for later recall.
 func (t TextInput) PushHistory(value string) TextInput {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -168,14 +212,10 @@ func (t TextInput) PrevHistory() TextInput {
 		t.historyIndex = len(t.history) - 1
 	} else if t.historyIndex > 0 {
 		t.historyIndex--
+	} else {
+		return t
 	}
-	t.Model.SetValue(t.history[t.historyIndex])
-	t.Model.SetCursor(len(t.history[t.historyIndex]))
-	t.showSuggestions = false
-	t.slashMode = false
-	t.suggestions = nil
-	t.suggestionOffset = 0
-	return t
+	return t.loadHistoryEntry(t.history[t.historyIndex])
 }
 
 // NextHistory moves forward in submitted-line history, restoring the draft at the end.
@@ -185,17 +225,12 @@ func (t TextInput) NextHistory() TextInput {
 	}
 	if t.historyIndex < len(t.history)-1 {
 		t.historyIndex++
-		t.Model.SetValue(t.history[t.historyIndex])
-		t.Model.SetCursor(len(t.history[t.historyIndex]))
-		t.showSuggestions = false
-		t.slashMode = false
-		t.suggestions = nil
-		t.suggestionOffset = 0
-		return t
+		return t.loadHistoryEntryAtEnd(t.history[t.historyIndex])
 	}
 	t.historyIndex = -1
 	t.Model.SetValue(t.historyDraft)
-	t.Model.SetCursor(len(t.historyDraft))
+	t.Model.SetCursor(len([]rune(t.historyDraft)))
+	t.syncLayout()
 	t.historyDraft = ""
 	t.showSuggestions = false
 	t.slashMode = false
@@ -204,13 +239,180 @@ func (t TextInput) NextHistory() TextInput {
 	return t
 }
 
+// MoveUp applies Codex-style up-arrow navigation inside the composer.
+func (t TextInput) MoveUp() TextInput {
+	if t.isAtTopDisplayRow() {
+		if !t.isAtLineStart() {
+			t.Model.CursorStart()
+			return t
+		}
+		return t.PrevHistory()
+	}
+	if t.visibleInputRows() <= 1 {
+		if !t.isAtLineStart() {
+			t.Model.CursorStart()
+			return t
+		}
+		return t.PrevHistory()
+	}
+	t.Model.CursorUp()
+	return t
+}
+
+// MoveDown applies ClaudeCode-style down-arrow navigation inside the composer.
+func (t TextInput) MoveDown() TextInput {
+	if t.isAtBottomDisplayRow() {
+		if !t.isAtLineEnd() {
+			t.Model.CursorEnd()
+			return t
+		}
+		return t.NextHistory()
+	}
+	if t.visibleInputRows() <= 1 {
+		if !t.isAtLineEnd() {
+			t.Model.CursorEnd()
+			return t
+		}
+		return t.NextHistory()
+	}
+	t.Model.CursorDown()
+	return t
+}
+
+// Paste reads clipboard content through the textarea paste command.
+func (t TextInput) Paste() (TextInput, tea.Cmd) {
+	return t.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+}
+
+func (t TextInput) isAtTopDisplayRow() bool {
+	return t.Model.Line() == 0 && t.Model.LineInfo().RowOffset == 0
+}
+
+func (t TextInput) isAtBottomDisplayRow() bool {
+	lines := strings.Split(t.Model.Value(), "\n")
+	if len(lines) == 0 {
+		return true
+	}
+	info := t.Model.LineInfo()
+	return t.Model.Line() == len(lines)-1 && info.RowOffset >= info.Height-1
+}
+
+func (t TextInput) isAtLineStart() bool {
+	return t.cursorColumn() == 0
+}
+
+func (t TextInput) isAtLineEnd() bool {
+	row := t.Model.Line()
+	lines := strings.Split(t.Model.Value(), "\n")
+	if row < 0 || row >= len(lines) {
+		return true
+	}
+	return t.cursorColumn() >= len([]rune(lines[row]))
+}
+
+// ResolvedSubmitValue returns the input value normalized for submission.
+// When slash suggestions are active, enter submits the currently selected command.
+func (t TextInput) ResolvedSubmitValue() string {
+	val := strings.TrimSpace(t.Model.Value())
+	if !t.showSuggestions || len(t.suggestions) == 0 {
+		return val
+	}
+
+	selected := t.SelectedSuggestion()
+	if selected == "" {
+		return val
+	}
+
+	command, suffix := splitSlashCommandAndSuffix(val)
+	if command == "" || !strings.HasPrefix(selected, command) {
+		return val
+	}
+	return selected + suffix
+}
+
+// ShouldInsertNewlineOnEnter reports whether enter should consume an immediate trailing backslash.
+func (t TextInput) ShouldInsertNewlineOnEnter() bool {
+	row := t.Model.Line()
+	lines := strings.Split(t.Model.Value(), "\n")
+	if row < 0 || row >= len(lines) {
+		return false
+	}
+	col := t.cursorColumn()
+	line := []rune(lines[row])
+	if col <= 0 || col > len(line) {
+		return false
+	}
+	return line[col-1] == '\\'
+}
+
+// InsertContinuationNewline consumes the immediate trailing backslash and inserts a real newline.
+func (t TextInput) InsertContinuationNewline() (TextInput, tea.Cmd) {
+	var cmds []tea.Cmd
+	m, cmd := t.Model.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	t.Model = m
+	if cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	t.Model.InsertString("\n")
+	t.syncLayout()
+	t.updateSuggestions()
+	return t, tea.Batch(cmds...)
+}
+
+func (t TextInput) loadHistoryEntry(value string) TextInput {
+	t.Model.SetValue(value)
+	t.moveCursorToStart()
+	return t.clearSuggestionsAndSync()
+}
+
+func (t TextInput) loadHistoryEntryAtEnd(value string) TextInput {
+	t.Model.SetValue(value)
+	return t.clearSuggestionsAndSync()
+}
+
+func (t TextInput) clearSuggestionsAndSync() TextInput {
+	t.syncLayout()
+	t.showSuggestions = false
+	t.slashMode = false
+	t.slashDismissed = false
+	t.suggestions = nil
+	t.suggestionOffset = 0
+	return t
+}
+
+func (t *TextInput) moveCursorToStart() {
+	for t.Model.Line() > 0 || t.Model.LineInfo().RowOffset > 0 {
+		t.Model.CursorUp()
+	}
+	t.Model.CursorStart()
+}
+
 // updateSuggestions updates the slash command suggestions based on current input.
 func (t *TextInput) updateSuggestions() {
-	val := t.Model.Value()
-	val = strings.TrimSpace(val)
+	val := strings.TrimLeftFunc(t.Model.Value(), unicode.IsSpace)
+	selected := t.SelectedSuggestion()
+
+	if t.historyIndex != -1 {
+		t.showSuggestions = false
+		t.slashMode = false
+		t.suggestions = nil
+		t.selectedIdx = 0
+		t.suggestionOffset = 0
+		return
+	}
 
 	// Only show suggestions if input starts with "/"
 	if !strings.HasPrefix(val, "/") {
+		t.showSuggestions = false
+		t.slashMode = false
+		t.slashDismissed = false
+		t.suggestions = nil
+		t.selectedIdx = 0
+		t.suggestionOffset = 0
+		return
+	}
+
+	if t.slashDismissed {
 		t.showSuggestions = false
 		t.slashMode = false
 		t.suggestions = nil
@@ -220,13 +422,31 @@ func (t *TextInput) updateSuggestions() {
 	}
 
 	// Get suggestions
-	t.suggestions = t.slashRegistry.Suggestions(val)
+	command, suffix := splitSlashCommandAndSuffix(val)
+	if suffix != "" {
+		t.showSuggestions = false
+		t.slashMode = false
+		t.suggestions = nil
+		t.selectedIdx = 0
+		t.suggestionOffset = 0
+		return
+	}
+	t.suggestions = t.slashRegistry.Suggestions(command)
 	t.showSuggestions = len(t.suggestions) > 0
 	if t.showSuggestions {
 		t.slashMode = true
 	}
 
-	// Reset selection if it's out of bounds
+	if selected != "" {
+		for i, suggestion := range t.suggestions {
+			if suggestion == selected {
+				t.selectedIdx = i
+				break
+			}
+		}
+	}
+
+	// Reset selection if it's out of bounds.
 	if t.selectedIdx >= len(t.suggestions) {
 		t.selectedIdx = 0
 	}
@@ -239,6 +459,7 @@ func (t *TextInput) updateSuggestions() {
 
 // View renders the input with optional suggestions.
 func (t TextInput) View() string {
+	t.syncLayout()
 	inputView := t.Model.View()
 
 	if !t.showSuggestions || len(t.suggestions) == 0 {
@@ -296,10 +517,11 @@ func (t TextInput) View() string {
 
 // Height returns the total height including suggestions area.
 func (t TextInput) Height() int {
+	rows := t.visibleInputRows()
 	if t.slashMode {
-		return 1 + maxVisibleSuggestions
+		return rows + maxVisibleSuggestions
 	}
-	return 1
+	return rows
 }
 
 // IsSlashMode returns true if showing slash suggestions.
@@ -311,6 +533,7 @@ func (t TextInput) IsSlashMode() bool {
 func (t TextInput) ClearSlashMode() TextInput {
 	t.slashMode = false
 	t.showSuggestions = false
+	t.slashDismissed = false
 	t.suggestions = nil
 	t.suggestionOffset = 0
 	return t
@@ -319,6 +542,24 @@ func (t TextInput) ClearSlashMode() TextInput {
 // HasSuggestions returns true if there are visible suggestion candidates.
 func (t TextInput) HasSuggestions() bool {
 	return t.showSuggestions && len(t.suggestions) > 0
+}
+
+// SelectedSuggestionIndex exposes the currently highlighted suggestion for tests.
+func (t TextInput) SelectedSuggestionIndex() int {
+	return t.selectedIdx
+}
+
+// SuggestionOffset exposes the current suggestion window offset for tests.
+func (t TextInput) SuggestionOffset() int {
+	return t.suggestionOffset
+}
+
+// SelectedSuggestion returns the currently highlighted slash command.
+func (t TextInput) SelectedSuggestion() string {
+	if t.selectedIdx < 0 || t.selectedIdx >= len(t.suggestions) {
+		return ""
+	}
+	return t.suggestions[t.selectedIdx]
 }
 
 func (t *TextInput) syncSuggestionWindow() {
@@ -350,5 +591,56 @@ func (t *TextInput) syncSuggestionWindow() {
 	}
 	if t.suggestionOffset < 0 {
 		t.suggestionOffset = 0
+	}
+}
+
+func (t *TextInput) syncLayout() {
+	t.Model.SetHeight(t.visibleInputRows())
+}
+
+func (t TextInput) visibleInputRows() int {
+	width := t.Model.Width()
+	if width < 1 {
+		return 1
+	}
+
+	rows := 0
+	for _, line := range strings.Split(t.Model.Value(), "\n") {
+		lineWidth := rw.StringWidth(line)
+		if lineWidth <= 0 {
+			rows++
+			continue
+		}
+		rows += (lineWidth-1)/width + 1
+	}
+	if rows < 1 {
+		rows = 1
+	}
+	if rows > maxVisibleInputRows {
+		rows = maxVisibleInputRows
+	}
+	return rows
+}
+
+func (t TextInput) cursorColumn() int {
+	info := t.Model.LineInfo()
+	return info.StartColumn + info.ColumnOffset
+}
+
+func splitSlashCommandAndSuffix(val string) (string, string) {
+	for i, r := range val {
+		if unicode.IsSpace(r) {
+			return val[:i], val[i:]
+		}
+	}
+	return val, ""
+}
+
+func keyEditsInput(msg tea.KeyMsg) bool {
+	switch msg.Type {
+	case tea.KeyRunes, tea.KeySpace, tea.KeyBackspace, tea.KeyDelete, tea.KeyCtrlH, tea.KeyCtrlW, tea.KeyCtrlU, tea.KeyCtrlK, tea.KeyEnter, tea.KeyCtrlV, tea.KeyInsert:
+		return true
+	default:
+		return false
 	}
 }

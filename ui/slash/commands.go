@@ -2,6 +2,7 @@
 package slash
 
 import (
+	"sort"
 	"strings"
 )
 
@@ -44,6 +45,9 @@ func (r *Registry) List() []Command {
 	for _, cmd := range r.commands {
 		cmds = append(cmds, cmd)
 	}
+	sort.Slice(cmds, func(i, j int) bool {
+		return cmds[i].Name < cmds[j].Name
+	})
 	return cmds
 }
 
@@ -59,6 +63,9 @@ func (r *Registry) Match(prefix string) []Command {
 			matches = append(matches, cmd)
 		}
 	}
+	sort.Slice(matches, func(i, j int) bool {
+		return matches[i].Name < matches[j].Name
+	})
 	return matches
 }
 
@@ -70,6 +77,7 @@ func (r *Registry) Suggestions(input string) []string {
 		for name := range r.commands {
 			names = append(names, name)
 		}
+		sort.Strings(names)
 		return names
 	}
 
@@ -80,6 +88,7 @@ func (r *Registry) Suggestions(input string) []string {
 			matches = append(matches, name)
 		}
 	}
+	sort.Strings(matches)
 	return matches
 }
 

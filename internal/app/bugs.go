@@ -43,13 +43,7 @@ func (a *Application) cmdBugs(args []string) {
 	}
 	bugs, err := a.issueService.ListBugs(listStatus)
 	if err != nil {
-		a.EventCh <- model.Event{
-			Type: model.BugIndexOpen,
-			BugView: &model.BugEventData{
-				Filter: status,
-				Err:    err,
-			},
-		}
+		a.EventCh <- model.Event{Type: model.AgentReply, Message: fmt.Sprintf("bugs failed: %v", err)}
 		return
 	}
 	a.EventCh <- model.Event{

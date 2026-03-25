@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -65,11 +66,32 @@ func TestCmdBugDetailOpensDetailViewEvent(t *testing.T) {
 	}
 }
 
+func TestCmdBugsFailureStaysInChatFlow(t *testing.T) {
+	store := &fakeIssueStore{
+		listErr: errors.New("server failed"),
+	}
+	app := &Application{
+		EventCh:      make(chan model.Event, 4),
+		issueService: issues.NewService(store),
+	}
+
+	app.cmdBugs(nil)
+
+	ev := <-app.EventCh
+	if ev.Type != model.AgentReply {
+		t.Fatalf("event type = %s, want %s", ev.Type, model.AgentReply)
+	}
+	if ev.Message != "bugs failed: server failed" {
+		t.Fatalf("event message = %q, want %q", ev.Message, "bugs failed: server failed")
+	}
+}
+
 type fakeIssueStore struct {
 	lastListStatus string
 	bugs           []issues.Bug
 	bug            *issues.Bug
 	activity       []issues.Activity
+	listErr        error
 }
 
 func (f *fakeIssueStore) CreateBug(title, reporter string) (*issues.Bug, error) {
@@ -78,7 +100,7 @@ func (f *fakeIssueStore) CreateBug(title, reporter string) (*issues.Bug, error) 
 
 func (f *fakeIssueStore) ListBugs(status string) ([]issues.Bug, error) {
 	f.lastListStatus = status
-	return f.bugs, nil
+	return f.bugs, f.listErr
 }
 
 func (f *fakeIssueStore) GetBug(id int) (*issues.Bug, error) {

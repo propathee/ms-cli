@@ -3,8 +3,12 @@ package ui
 import (
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/atotto/clipboard"
+	"github.com/charmbracelet/bubbles/cursor"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/vigo999/ms-cli/ui/components"
 	"github.com/vigo999/ms-cli/ui/model"
 )
 
@@ -298,89 +302,802 @@ func TestTrainSetupStreamsProgressAndSummaryToChat(t *testing.T) {
 	}
 }
 
-func TestUpDownRecallInputHistoryInsteadOfScrollingViewport(t *testing.T) {
+func TestUpOnSingleLineMovesCursorToStart(t *testing.T) {
 	app := New(nil, nil, "test", ".", "", "demo-model", 4096)
 	app.bootActive = false
 
 	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
-	app = next.(App)
-
-	app.input.Model.SetValue("first message")
-	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
-	app = next.(App)
-
-	app.input.Model.SetValue("second message")
-	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
-	app = next.(App)
-
-	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyUp})
-	app = next.(App)
-	if got := app.input.Value(); got != "second message" {
-		t.Fatalf("expected up to recall latest history entry, got %q", got)
-	}
-
-	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyUp})
-	app = next.(App)
-	if got := app.input.Value(); got != "first message" {
-		t.Fatalf("expected second up to recall earlier history entry, got %q", got)
-	}
-
-	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyDown})
-	app = next.(App)
-	if got := app.input.Value(); got != "second message" {
-		t.Fatalf("expected down to move forward in history, got %q", got)
-	}
-}
-
-func TestUpDownContinueHistoryAcrossSlashCommandsWithoutEnteringSuggestionNavigation(t *testing.T) {
-	app := New(nil, nil, "test", ".", "", "demo-model", 4096)
-	app.bootActive = false
-
-	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
-	app = next.(App)
-
-	app.input.Model.SetValue("/project")
-	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
 	app = next.(App)
 
 	app.input.Model.SetValue("hello")
-	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	app.input.Model.SetCursor(len("hello"))
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyUp})
 	app = next.(App)
 
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'X'}})
+	app = next.(App)
+
+	if got := app.input.Value(); got != "Xhello" {
+		t.Fatalf("expected up to move cursor to line start, got %q", got)
+	}
+}
+
+func TestDownOnSingleLineMovesCursorToEnd(t *testing.T) {
+	app := New(nil, nil, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	app = next.(App)
+
+	app.input.Model.SetValue("hello")
+	app.input.Model.SetCursor(0)
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	app = next.(App)
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'Y'}})
+	app = next.(App)
+
+	if got := app.input.Value(); got != "helloY" {
+		t.Fatalf("expected down to move cursor to line end, got %q", got)
+	}
+}
+
+func TestUpAtSingleLineStartRecallsPreviousHistoryEntry(t *testing.T) {
+	app := New(nil, nil, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	app = next.(App)
+
+	app.input = app.input.PushHistory("first prompt")
+	app.input = app.input.PushHistory("second prompt")
 	app.input.Model.SetValue("draft")
 	app.input.Model.SetCursor(len("draft"))
 
 	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyUp})
 	app = next.(App)
-	if got := app.input.Value(); got != "hello" {
-		t.Fatalf("expected first up to recall latest history entry, got %q", got)
-	}
-	if app.input.IsSlashMode() {
-		t.Fatal("expected no slash suggestions while browsing history")
+	if got := app.input.Value(); got != "draft" {
+		t.Fatalf("expected first up to only move to line start, got %q", got)
 	}
 
 	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyUp})
 	app = next.(App)
-	if got := app.input.Value(); got != "/project" {
-		t.Fatalf("expected second up to recall slash history entry, got %q", got)
+	if got := app.input.Value(); got != "second prompt" {
+		t.Fatalf("expected second up at line start to recall latest history entry, got %q", got)
 	}
-	if app.input.IsSlashMode() {
-		t.Fatal("expected slash history recall not to enter suggestion navigation")
-	}
+}
+
+func TestDownAtSingleLineEndMovesForwardInHistory(t *testing.T) {
+	app := New(nil, nil, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	app = next.(App)
+
+	app.input = app.input.PushHistory("single prompt")
+	app.input.Model.SetValue("draft")
+	app.input.Model.SetCursor(0)
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	app = next.(App)
 
 	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyDown})
 	app = next.(App)
-	if got := app.input.Value(); got != "hello" {
-		t.Fatalf("expected down to keep moving forward in history, got %q", got)
+	if got := app.input.Value(); got != "single prompt" {
+		t.Fatalf("expected first down on recalled single-line history to stay on the entry, got %q", got)
 	}
 
 	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyDown})
 	app = next.(App)
 	if got := app.input.Value(); got != "draft" {
-		t.Fatalf("expected second down to restore draft, got %q", got)
+		t.Fatalf("expected second down at recalled-line end to restore draft, got %q", got)
+	}
+}
+
+func TestUpDownMoveCursorAcrossMultilineInput(t *testing.T) {
+	app := New(nil, nil, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	app = next.(App)
+
+	app.input.Model.SetValue("first line\nsecond line")
+	app.input.Model.SetCursor(len("second line"))
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	app = next.(App)
+	if got := app.input.Model.Line(); got != 0 {
+		t.Fatalf("expected up to move cursor to first logical line, got line %d", got)
+	}
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	app = next.(App)
+	if got := app.input.Model.Line(); got != 1 {
+		t.Fatalf("expected down to move cursor back to second logical line, got line %d", got)
+	}
+}
+
+func TestUpAtTopMultilineBoundaryMovesToLineStartThenHistory(t *testing.T) {
+	app := New(nil, nil, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	app = next.(App)
+
+	app.input = app.input.PushHistory("older prompt")
+	app.input.Model.SetValue("hell\nabbb\ncccc")
+
+	for i := 0; i < 2; i++ {
+		next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+		app = next.(App)
+	}
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	app = next.(App)
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'X'}})
+	app = next.(App)
+	if got := app.input.Value(); got != "Xhell\nabbb\ncccc" {
+		t.Fatalf("expected third up at top boundary to move to line start, got %q", got)
+	}
+
+	app.input.Model.SetValue("hell\nabbb\ncccc")
+	for i := 0; i < 2; i++ {
+		next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+		app = next.(App)
+	}
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	app = next.(App)
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	app = next.(App)
+	if got := app.input.Value(); got != "older prompt" {
+		t.Fatalf("expected fourth up at top line start to recall history, got %q", got)
+	}
+}
+
+func TestUpAtTopMultilineBoundaryFromMiddleColumnMovesToLineStartWithoutWrapping(t *testing.T) {
+	app := New(nil, nil, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	app = next.(App)
+
+	app.input.Model.SetValue("hell\nabbb\ncccc")
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	app = next.(App)
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyLeft})
+	app = next.(App)
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyLeft})
+	app = next.(App)
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	app = next.(App)
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	app = next.(App)
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'X'}})
+	app = next.(App)
+
+	if got := app.input.Value(); got != "Xhell\nabbb\ncccc" {
+		t.Fatalf("expected repeated up at top boundary from middle column to move to line start, got %q", got)
+	}
+}
+
+func TestDownAtBottomMultilineBoundaryMovesToLineEndThenDraft(t *testing.T) {
+	app := New(nil, nil, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	app = next.(App)
+
+	app.input = app.input.PushHistory("older prompt")
+	app.input.Model.SetValue("hell\nabbb\ncccc")
+
+	for i := 0; i < 3; i++ {
+		next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+		app = next.(App)
+	}
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	app = next.(App)
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	app = next.(App)
+	if got := app.input.Value(); got != "older prompt" {
+		t.Fatalf("expected first down on recalled history to stay on the entry until line end, got %q", got)
+	}
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	app = next.(App)
+	if got := app.input.Value(); got != "hell\nabbb\ncccc" {
+		t.Fatalf("expected second down from recalled history to restore draft, got %q", got)
+	}
+}
+
+func TestDownAtBottomMultilineBoundaryFromMiddleColumnMovesToLineEndBeforeHistory(t *testing.T) {
+	app := New(nil, nil, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	app = next.(App)
+
+	app.input = app.input.PushHistory("older prompt")
+	app.input.Model.SetValue("hell\nabbb\ncccc")
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyLeft})
+	app = next.(App)
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyLeft})
+	app = next.(App)
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	app = next.(App)
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'X'}})
+	app = next.(App)
+
+	if got := app.input.Value(); got != "hell\nabbb\nccccX" {
+		t.Fatalf("expected first down at bottom boundary from middle column to move to line end, got %q", got)
+	}
+}
+
+func TestHistoryRecallPlacesCursorAtFirstLineStartForRepeatedUp(t *testing.T) {
+	app := New(nil, nil, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	app = next.(App)
+
+	app.input = app.input.PushHistory("first command")
+	app.input = app.input.PushHistory("second command")
+	app.input.Model.SetValue("draft")
+	app.input.Model.SetCursor(0)
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	app = next.(App)
+	if got := app.input.Value(); got != "second command" {
+		t.Fatalf("expected first up at draft start to recall latest history, got %q", got)
+	}
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	app = next.(App)
+	if got := app.input.Value(); got != "first command" {
+		t.Fatalf("expected second consecutive up to recall previous history, got %q", got)
+	}
+}
+
+func TestDownMovesToNextHistoryEntryWithCursorAtLastLineEnd(t *testing.T) {
+	app := New(nil, nil, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	app = next.(App)
+
+	app.input = app.input.PushHistory("older line\nolder tail")
+	app.input = app.input.PushHistory("newer line\nnewer tail")
+	app.input.Model.SetValue("")
+	app.input.Model.SetCursor(0)
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	app = next.(App)
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	app = next.(App)
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	app = next.(App)
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	app = next.(App)
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	app = next.(App)
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'X'}})
+	app = next.(App)
+
+	if got := app.input.Value(); got != "newer line\nnewer tailX" {
+		t.Fatalf("expected down-recalled history cursor at last-line end, got %q", got)
+	}
+}
+
+func TestUpAtOldestHistoryEntryKeepsCursorAtFirstLineStart(t *testing.T) {
+	app := New(nil, nil, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	app = next.(App)
+
+	app.input = app.input.PushHistory("older line\nsecond line")
+	app.input.Model.SetValue("")
+	app.input.Model.SetCursor(0)
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	app = next.(App)
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	app = next.(App)
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'X'}})
+	app = next.(App)
+
+	if got := app.input.Value(); got != "Xolder line\nsecond line" {
+		t.Fatalf("expected extra up at oldest history to stay at first-line start, got %q", got)
+	}
+}
+
+func TestBackslashEnterInsertsNewlineWithoutSubmitting(t *testing.T) {
+	userCh := make(chan string, 1)
+	app := New(nil, userCh, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	app = next.(App)
+
+	app.input.Model.SetValue("first\\")
+	app.input.Model.SetCursor(len("first\\"))
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	app = next.(App)
+
+	if got := app.input.Value(); got != "first\n" {
+		t.Fatalf("expected backslash-enter to insert newline, got %q", got)
+	}
+	if len(app.state.Messages) != 0 {
+		t.Fatalf("expected no chat submit on backslash-enter, got %#v", app.state.Messages)
+	}
+	select {
+	case msg := <-userCh:
+		t.Fatalf("expected no backend submit on backslash-enter, got %q", msg)
+	default:
+	}
+}
+
+func TestBackslashEnterKeepsPreviousLineVisibleWithoutRepeatingPrompt(t *testing.T) {
+	app := New(nil, nil, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 18, Height: 20})
+	app = next.(App)
+
+	for _, r := range "first\\" {
+		next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		app = next.(App)
+	}
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	app = next.(App)
+
+	view := app.input.View()
+	if !strings.Contains(view, "first") {
+		t.Fatalf("expected first line to remain visible after continuation newline, got %q", view)
+	}
+	if got := strings.Count(view, "❯ "); got != 1 {
+		t.Fatalf("expected prompt to render once in multiline composer, got %d in %q", got, view)
+	}
+}
+
+func TestSlashCommandEnterSubmitsInsteadOfAcceptingSuggestion(t *testing.T) {
+	userCh := make(chan string, 1)
+	app := New(nil, userCh, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	app = next.(App)
+
+	for _, r := range "/ex" {
+		next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		app = next.(App)
+	}
+	if !app.input.IsSlashMode() {
+		t.Fatal("expected slash mode to be active before submitting slash command")
+	}
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	app = next.(App)
+
+	if got := app.input.Value(); got != "" {
+		t.Fatalf("expected composer to reset after slash command submit, got %q", got)
 	}
 	if app.input.IsSlashMode() {
-		t.Fatal("expected restored draft to stay out of slash suggestion mode")
+		t.Fatal("expected slash mode to close after slash command submit")
+	}
+	select {
+	case msg := <-userCh:
+		if msg != "/exit" {
+			t.Fatalf("expected slash command submit to autocomplete and forward /exit, got %q", msg)
+		}
+	default:
+		t.Fatal("expected slash command submit to reach backend channel")
+	}
+}
+
+func TestSlashCommandTabClosesSuggestionList(t *testing.T) {
+	app := New(nil, nil, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	app = next.(App)
+
+	for _, r := range "/ex" {
+		next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		app = next.(App)
+	}
+	if !app.input.HasSuggestions() {
+		t.Fatal("expected slash suggestions before tab completion")
+	}
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyTab})
+	app = next.(App)
+	if got := app.input.Value(); got != "/exit " {
+		t.Fatalf("expected tab to accept the selected slash command, got %q", got)
+	}
+	if app.input.IsSlashMode() || app.input.HasSuggestions() {
+		t.Fatal("expected slash suggestions to close after tab completion")
+	}
+
+	next, _ = app.Update(cursor.BlinkMsg{})
+	app = next.(App)
+	if app.input.IsSlashMode() || app.input.HasSuggestions() {
+		t.Fatal("expected slash suggestions to stay closed after tab completion on follow-up updates")
+	}
+}
+
+func TestSlashCommandEscClosesSuggestionListUntilNextEdit(t *testing.T) {
+	app := New(nil, nil, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	app = next.(App)
+
+	for _, r := range "/ex" {
+		next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		app = next.(App)
+	}
+	if !app.input.HasSuggestions() {
+		t.Fatal("expected slash suggestions before esc dismissal")
+	}
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	app = next.(App)
+	if app.input.IsSlashMode() || app.input.HasSuggestions() {
+		t.Fatal("expected esc to close slash suggestions")
+	}
+
+	next, _ = app.Update(cursor.BlinkMsg{})
+	app = next.(App)
+	if app.input.IsSlashMode() || app.input.HasSuggestions() {
+		t.Fatal("expected slash suggestions to stay closed after esc on follow-up updates")
+	}
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	app = next.(App)
+	if !app.input.IsSlashMode() || !app.input.HasSuggestions() {
+		t.Fatal("expected editing after esc dismissal to reopen slash suggestions")
+	}
+}
+
+func TestEnterSubmitsWhenBackslashIsNotImmediatePreviousCharacter(t *testing.T) {
+	userCh := make(chan string, 1)
+	app := New(nil, userCh, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	app = next.(App)
+
+	app.input.Model.SetValue("first\\ ")
+	app.input.Model.SetCursor(len("first\\ "))
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	app = next.(App)
+
+	if got := len(app.state.Messages); got != 1 {
+		t.Fatalf("expected one submitted user message, got %d", got)
+	}
+	if got := app.state.Messages[0].Content; got != "first\\" {
+		t.Fatalf("expected submitted content to keep literal backslash, got %q", got)
+	}
+	select {
+	case msg := <-userCh:
+		if msg != "first\\" {
+			t.Fatalf("expected backend submit to keep literal backslash, got %q", msg)
+		}
+	default:
+		t.Fatal("expected backend submit on normal enter")
+	}
+}
+
+func TestSubmittingMultilinePromptPreservesFormatting(t *testing.T) {
+	userCh := make(chan string, 1)
+	app := New(nil, userCh, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	app = next.(App)
+
+	app.input.Model.SetValue("line one\nline two")
+	app.input.Model.SetCursor(len("line two"))
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	app = next.(App)
+
+	if got := len(app.state.Messages); got != 1 {
+		t.Fatalf("expected one submitted user message, got %d", got)
+	}
+	if got := app.state.Messages[0].Content; got != "line one\nline two" {
+		t.Fatalf("expected submitted content to preserve multiline formatting, got %q", got)
+	}
+	select {
+	case msg := <-userCh:
+		if msg != "line one\nline two" {
+			t.Fatalf("expected backend submit to preserve multiline formatting, got %q", msg)
+		}
+	default:
+		t.Fatal("expected backend submit for multiline prompt")
+	}
+}
+
+func TestCtrlVPastesMultilinePromptIntoComposerWithoutSubmitting(t *testing.T) {
+	if err := clipboard.WriteAll("line one\nline two"); err != nil {
+		t.Skipf("clipboard unavailable: %v", err)
+	}
+
+	userCh := make(chan string, 1)
+	app := New(nil, userCh, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	app = next.(App)
+
+	next, cmd := app.handleKey(tea.KeyMsg{Type: tea.KeyCtrlV})
+	app = next.(App)
+	if cmd == nil {
+		t.Fatal("expected ctrl+v to return a paste command")
+	}
+
+	msg := cmd()
+	next, _ = app.Update(msg)
+	app = next.(App)
+
+	if got := app.input.Value(); got != "line one\nline two" {
+		t.Fatalf("expected ctrl+v paste to preserve multiline content, got %q", got)
+	}
+	if len(app.state.Messages) != 0 {
+		t.Fatalf("expected pasted content to stay in composer, got %#v", app.state.Messages)
+	}
+	select {
+	case msg := <-userCh:
+		t.Fatalf("expected no backend submit while pasting, got %q", msg)
+	default:
+	}
+}
+
+func TestInsertPastesMultilinePromptIntoComposerWithoutSubmitting(t *testing.T) {
+	if err := clipboard.WriteAll("line one\nline two"); err != nil {
+		t.Skipf("clipboard unavailable: %v", err)
+	}
+
+	userCh := make(chan string, 1)
+	app := New(nil, userCh, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	app = next.(App)
+
+	next, cmd := app.handleKey(tea.KeyMsg{Type: tea.KeyInsert})
+	app = next.(App)
+	if cmd != nil {
+		t.Fatal("expected insert paste to happen synchronously without a follow-up command")
+	}
+
+	if got := app.input.Value(); got != "line one\nline two" {
+		t.Fatalf("expected insert paste to preserve multiline content, got %q", got)
+	}
+	if len(app.state.Messages) != 0 {
+		t.Fatalf("expected pasted content to stay in composer, got %#v", app.state.Messages)
+	}
+	select {
+	case msg := <-userCh:
+		t.Fatalf("expected no backend submit while insert pasting, got %q", msg)
+	default:
+	}
+}
+
+func TestInsertPasteSuppressesFollowingNativePasteKeyStream(t *testing.T) {
+	if err := clipboard.WriteAll("line one\nline two"); err != nil {
+		t.Skipf("clipboard unavailable: %v", err)
+	}
+
+	userCh := make(chan string, 8)
+	app := New(nil, userCh, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	app = next.(App)
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyInsert})
+	app = next.(App)
+
+	for _, msg := range []tea.KeyMsg{
+		{Type: tea.KeyRunes, Runes: []rune("line one")},
+		{Type: tea.KeyEnter},
+		{Type: tea.KeyRunes, Runes: []rune("line two")},
+	} {
+		next, _ = app.handleKey(msg)
+		app = next.(App)
+	}
+
+	if got := app.input.Value(); got != "line one\nline two" {
+		t.Fatalf("expected duplicate native paste stream to be suppressed, got %q", got)
+	}
+	if len(app.state.Messages) != 0 {
+		t.Fatalf("expected suppressed native paste stream not to submit messages, got %#v", app.state.Messages)
+	}
+	select {
+	case msg := <-userCh:
+		t.Fatalf("expected no backend submit while suppressing duplicate paste stream, got %q", msg)
+	default:
+	}
+}
+
+func TestBracketedPasteMultilinePromptIntoComposerWithoutSubmitting(t *testing.T) {
+	userCh := make(chan string, 1)
+	app := New(nil, userCh, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	app = next.(App)
+
+	next, _ = app.Update(tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune("line one\nline two"),
+		Paste: true,
+	})
+	app = next.(App)
+
+	if got := app.input.Value(); got != "line one\nline two" {
+		t.Fatalf("expected bracketed paste to preserve multiline content, got %q", got)
+	}
+	if len(app.state.Messages) != 0 {
+		t.Fatalf("expected pasted content to stay in composer, got %#v", app.state.Messages)
+	}
+	select {
+	case msg := <-userCh:
+		t.Fatalf("expected no backend submit while bracketed pasting, got %q", msg)
+	default:
+	}
+}
+
+func TestPasteKeyStreamWithNewlineEnterDoesNotSubmitPerLine(t *testing.T) {
+	userCh := make(chan string, 4)
+	app := New(nil, userCh, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	app = next.(App)
+
+	for _, msg := range []tea.KeyMsg{
+		{Type: tea.KeyRunes, Runes: []rune("line one"), Paste: true},
+		{Type: tea.KeyEnter, Paste: true},
+		{Type: tea.KeyRunes, Runes: []rune("line two"), Paste: true},
+		{Type: tea.KeyEnter, Paste: true},
+		{Type: tea.KeyRunes, Runes: []rune("line three"), Paste: true},
+	} {
+		next, _ = app.handleKey(msg)
+		app = next.(App)
+	}
+
+	if got := app.input.Value(); got != "line one\nline two\nline three" {
+		t.Fatalf("expected pasted key stream to stay in composer, got %q", got)
+	}
+	if len(app.state.Messages) != 0 {
+		t.Fatalf("expected pasted key stream not to submit messages, got %#v", app.state.Messages)
+	}
+	select {
+	case msg := <-userCh:
+		t.Fatalf("expected pasted key stream not to reach backend, got %q", msg)
+	default:
+	}
+}
+
+func TestSlashSuggestionsDoNotMoveOnThinkingTick(t *testing.T) {
+	app := New(nil, nil, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	app = next.(App)
+
+	for _, r := range "/train" {
+		next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		app = next.(App)
+	}
+	if !app.input.HasSuggestions() {
+		t.Fatal("expected slash suggestions before background tick")
+	}
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	app = next.(App)
+	selectedBefore := app.input.SelectedSuggestionIndex()
+	offsetBefore := app.input.SuggestionOffset()
+	viewBefore := app.input.View()
+
+	next, _ = app.Update(components.TickMsg{Time: time.Now()})
+	app = next.(App)
+
+	if got := app.input.SelectedSuggestionIndex(); got != selectedBefore {
+		t.Fatalf("expected thinking tick to keep selected suggestion index %d, got %d", selectedBefore, got)
+	}
+	if got := app.input.SuggestionOffset(); got != offsetBefore {
+		t.Fatalf("expected thinking tick to keep suggestion offset %d, got %d", offsetBefore, got)
+	}
+	if got := app.input.View(); got != viewBefore {
+		t.Fatalf("expected thinking tick to leave suggestion view unchanged\nbefore:\n%q\nafter:\n%q", viewBefore, got)
+	}
+}
+
+func TestHistoryRecallOfSlashCommandDoesNotReopenSlashSuggestionsOnBlink(t *testing.T) {
+	app := New(nil, nil, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	app = next.(App)
+
+	app.input = app.input.PushHistory("/compact")
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	app = next.(App)
+	if got := app.input.Value(); got != "/compact" {
+		t.Fatalf("expected slash history recall, got %q", got)
+	}
+	if app.input.IsSlashMode() {
+		t.Fatal("expected slash suggestions to stay closed immediately after slash history recall")
+	}
+
+	next, _ = app.Update(cursor.BlinkMsg{})
+	app = next.(App)
+	if app.input.IsSlashMode() {
+		t.Fatal("expected slash suggestions to stay closed while browsing slash history")
+	}
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	app = next.(App)
+	if got := app.input.Value(); got != "/compact" {
+		t.Fatalf("expected first down on recalled slash history to stay on the entry, got %q", got)
+	}
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	app = next.(App)
+	if got := app.input.Value(); got != "" {
+		t.Fatalf("expected second down to leave slash history recall and restore draft, got %q", got)
+	}
+}
+
+func TestAppViewKeepsComposerContinuationIndented(t *testing.T) {
+	app := New(nil, nil, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	app = next.(App)
+
+	app.input.Model.SetValue("hello\nworld\n!!!")
+	app.input.Model.SetCursor(len("!!!"))
+
+	view := app.View()
+	for _, want := range []string{"  ❯ hello", "\n    world", "\n    !!!"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected multiline composer indentation %q in view, got:\n%s", want, view)
+		}
+	}
+}
+
+func TestSubmittingMultilinePromptRendersAlignedUserMessageBlock(t *testing.T) {
+	userCh := make(chan string, 1)
+	app := New(nil, userCh, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	app = next.(App)
+
+	app.input.Model.SetValue("hello\nworld\n!!!")
+	app.input.Model.SetCursor(len("!!!"))
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	app = next.(App)
+
+	view := app.View()
+	for _, want := range []string{"  > hello", "\n    world", "\n    !!!"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected multiline submitted message indentation %q in view, got:\n%s", want, view)
+		}
 	}
 }
 

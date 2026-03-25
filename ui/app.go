@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/atotto/clipboard"
+	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/vigo999/ms-cli/ui/components"
 	"github.com/vigo999/ms-cli/ui/model"
@@ -118,6 +120,7 @@ type App struct {
 	bootActive    bool
 	bootHighlight int
 	queuedInputs  []string
+	pasteSuppress []rune
 }
 
 // New creates a new App driven by the given event channel.
@@ -143,6 +146,7 @@ func (a App) waitForEvent() tea.Msg {
 
 func (a App) Init() tea.Cmd {
 	return tea.Batch(
+		func() tea.Msg { return tea.EnableBracketedPaste() },
 		a.thinking.Tick(),
 		tea.Tick(bootTickRate, func(time.Time) tea.Msg {
 			return bootTickMsg{}
@@ -181,6 +185,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.bootActive {
 			return a, nil
 		}
+		debugLogKey("update.key", msg)
 		m, cmd := a.handleKey(msg)
 		return m, a.ensureWaitForEvent(cmd)
 
@@ -214,6 +219,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	default:
 		var cmd tea.Cmd
+		if isInputInternalMsg(msg) {
+			debugLogMsg("update.internal", msg)
+			a.input, cmd = a.input.Update(msg)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			a.resizeActiveLayout()
+		}
 		a.thinking, cmd = a.thinking.Update(msg)
 		if cmd != nil {
 			cmds = append(cmds, cmd)
@@ -253,6 +266,8 @@ func (a *App) resizeActiveLayout() {
 }
 
 func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	debugLogKey("handle.key", msg)
+
 	if msg.String() == "ctrl+c" {
 		now := time.Now()
 		if now.Sub(a.lastInterrupt) < time.Second {
@@ -266,6 +281,14 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			Content: "Interrupted. Press Ctrl+C again within 1 second to exit.",
 		})
 		a.updateViewport()
+		return a, nil
+	}
+
+	if a.consumeSuppressedPaste(msg) {
+		return a, nil
+	}
+
+	if handled := a.handlePastedKey(msg); handled {
 		return a, nil
 	}
 
@@ -355,16 +378,29 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.resizeActiveLayout()
 		return a, cmd
 
+	case "insert":
+		text, err := clipboard.ReadAll()
+		if err != nil {
+			return a, nil
+		}
+		text = normalizePasteText(text)
+		if text == "" {
+			return a, nil
+		}
+		a.input = a.input.InsertText(text)
+		a.pasteSuppress = []rune(text)
+		a.resizeActiveLayout()
+		return a, nil
+
 	case "enter":
-		// Don't process enter if in slash mode (handled above)
-		if a.input.IsSlashMode() {
+		if a.input.ShouldInsertNewlineOnEnter() {
 			var cmd tea.Cmd
-			a.input, cmd = a.input.Update(msg)
+			a.input, cmd = a.input.InsertContinuationNewline()
 			a.resizeActiveLayout()
 			return a, cmd
 		}
 
-		val := strings.TrimSpace(a.input.Value())
+		val := strings.TrimSpace(a.input.ResolvedSubmitValue())
 		if val == "" {
 			if a.trainView.Active && len(a.trainView.GlobalActions.Items) > 0 {
 				return a.handleTrainAction()
@@ -404,9 +440,9 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "up", "down":
 		if msg.String() == "up" {
-			a.input = a.input.PrevHistory()
+			a.input = a.input.MoveUp()
 		} else {
-			a.input = a.input.NextHistory()
+			a.input = a.input.MoveDown()
 		}
 		a.resizeActiveLayout()
 		return a, nil
@@ -416,6 +452,80 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.input, cmd = a.input.Update(msg)
 		a.resizeActiveLayout()
 		return a, cmd
+	}
+}
+
+func isInputInternalMsg(msg tea.Msg) bool {
+	switch msg.(type) {
+	case cursor.BlinkMsg:
+		return true
+	}
+
+	msgType := fmt.Sprintf("%T", msg)
+	return msgType == "textarea.pasteMsg" || msgType == "textarea.pasteErrMsg"
+}
+
+func normalizePasteText(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	return text
+}
+
+func (a *App) handlePastedKey(msg tea.KeyMsg) bool {
+	if !msg.Paste {
+		return false
+	}
+	debugLogKey("handle.paste", msg)
+
+	switch msg.Type {
+	case tea.KeyRunes:
+		if len(msg.Runes) == 0 {
+			return true
+		}
+		a.input = a.input.InsertText(string(msg.Runes))
+	case tea.KeyEnter:
+		a.input = a.input.InsertText("\n")
+	default:
+		return false
+	}
+
+	a.resizeActiveLayout()
+	return true
+}
+
+func (a *App) consumeSuppressedPaste(msg tea.KeyMsg) bool {
+	if len(a.pasteSuppress) == 0 {
+		return false
+	}
+
+	switch msg.Type {
+	case tea.KeyRunes:
+		if len(msg.Runes) == 0 {
+			a.pasteSuppress = nil
+			return false
+		}
+		if len(a.pasteSuppress) < len(msg.Runes) {
+			a.pasteSuppress = nil
+			return false
+		}
+		for i, r := range msg.Runes {
+			if a.pasteSuppress[i] != r {
+				a.pasteSuppress = nil
+				return false
+			}
+		}
+		a.pasteSuppress = a.pasteSuppress[len(msg.Runes):]
+		return true
+	case tea.KeyEnter:
+		if a.pasteSuppress[0] == '\n' {
+			a.pasteSuppress = a.pasteSuppress[1:]
+			return true
+		}
+		a.pasteSuppress = nil
+		return false
+	default:
+		a.pasteSuppress = nil
+		return false
 	}
 }
 
@@ -1946,7 +2056,7 @@ func (a App) View() string {
 	if len(a.queuedInputs) > 0 {
 		queueBanner = queueBannerStyle.Render("messages queued (press esc to interrupt)")
 	}
-	input := "  " + a.input.View()
+	input := indentBlock(a.input.View(), "  ")
 	hintBar := panels.RenderHintBar(a.state, a.width)
 
 	parts := []string{topBar}
@@ -1975,6 +2085,17 @@ func (a App) View() string {
 	}
 
 	return trimViewHeight(layout, a.height)
+}
+
+func indentBlock(content, prefix string) string {
+	if prefix == "" || content == "" {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	for i := range lines {
+		lines[i] = prefix + lines[i]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func trimViewHeight(content string, height int) string {

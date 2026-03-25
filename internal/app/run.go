@@ -4,6 +4,8 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -55,6 +57,15 @@ func (a *Application) run() error {
 func (a *Application) runReal() error {
 	userCh := make(chan string, 8)
 	tui := ui.New(a.EventCh, userCh, Version, a.WorkDir, a.RepoURL, a.Config.Model.Model, a.Config.Context.MaxTokens)
+	if path := os.Getenv("MSCLI_DEBUG_LOG"); path != "" {
+		f, err := tea.LogToFile(path, "ms-cli")
+		if err != nil {
+			return fmt.Errorf("open debug log: %w", err)
+		}
+		defer f.Close()
+		ui.EnableDebugKeyLogging(true)
+		log.Printf("debug key logging enabled: %s", path)
+	}
 	p := tea.NewProgram(tui, tea.WithAltScreen())
 
 	// Emit saved login so the topbar shows the user immediately.
