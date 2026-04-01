@@ -183,6 +183,43 @@ func (t TextInput) Update(msg tea.Msg) (TextInput, tea.Cmd) {
 	return t, cmd
 }
 
+// ConsumeEscapedEnter converts a backslash immediately before the cursor into a newline.
+// It returns the updated input and whether the escape was consumed.
+func (t TextInput) ConsumeEscapedEnter() (TextInput, bool) {
+	row, col, lines := t.cursorPosition()
+	if row < 0 || row >= len(lines) || col <= 0 {
+		return t, false
+	}
+
+	current := []rune(lines[row])
+	if col > len(current) || current[col-1] != '\\' {
+		return t, false
+	}
+
+	left := string(current[:col-1])
+	right := string(current[col:])
+
+	updatedLines := make([]string, 0, len(lines)+1)
+	updatedLines = append(updatedLines, lines[:row]...)
+	updatedLines = append(updatedLines, left, right)
+	updatedLines = append(updatedLines, lines[row+1:]...)
+
+	t.Model.SetValue(strings.Join(updatedLines, "\n"))
+	targetRow := row + 1
+	t.Model.SetCursor(0)
+	for t.Model.Line() > targetRow {
+		t.Model.CursorUp()
+	}
+	for t.Model.Line() < targetRow {
+		t.Model.CursorDown()
+	}
+	t.Model.SetCursor(0)
+	t.syncHeight()
+	t.updateSuggestions()
+
+	return t, true
+}
+
 // PushHistory stores a submitted input line for later up/down recall.
 func (t TextInput) PushHistory(value string) TextInput {
 	value = strings.TrimSpace(value)

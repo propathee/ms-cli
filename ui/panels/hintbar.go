@@ -185,6 +185,7 @@ func RenderIssueHintBar(width int, mode model.IssueMode) string {
 			{"s", "status"},
 			{"esc", "back"},
 			{"ctrl+c", "quit"},
+			{"ctrl+j or \\+enter", "newline"},
 		}
 	}
 
@@ -202,7 +203,7 @@ func RenderIssueHintBar(width int, mode model.IssueMode) string {
 		line += p
 	}
 
-	return divider + "\n" + line + hintDescStyle.Render("  [issues]")
+	return divider + "\n" + line
 }
 
 // RenderTrainHintBar renders the hint bar for the train workspace with focus context.

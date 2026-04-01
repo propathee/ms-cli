@@ -411,6 +411,126 @@ func TestPastedComposerLinesStayVisibleInAppView(t *testing.T) {
 	}
 }
 
+func TestBackslashEnterInsertsComposerNewlineWithoutSubmitting(t *testing.T) {
+	userCh := make(chan string, 1)
+	app := New(nil, userCh, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	app = next.(App)
+
+	app.input.Model.SetValue("line one\\")
+	app.input.Model.SetCursor(len([]rune("line one\\")))
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	app = next.(App)
+
+	if got := app.input.Value(); got != "line one\n" {
+		t.Fatalf("expected backslash+enter to insert newline, got %q", got)
+	}
+	select {
+	case msg := <-userCh:
+		t.Fatalf("expected backslash+enter not to submit input, got %q", msg)
+	default:
+	}
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line two")})
+	app = next.(App)
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	app = next.(App)
+
+	select {
+	case msg := <-userCh:
+		if msg != "line one\nline two" {
+			t.Fatalf("expected multiline submit after backslash+enter, got %q", msg)
+		}
+	default:
+		t.Fatal("expected enter to submit multiline input")
+	}
+}
+
+func TestEnterAcceptsSlashSuggestion(t *testing.T) {
+	userCh := make(chan string, 1)
+	app := New(nil, userCh, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	app = next.(App)
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	app = next.(App)
+	if !app.input.IsSlashMode() {
+		t.Fatal("expected slash suggestions to be visible")
+	}
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	app = next.(App)
+
+	if got := app.input.Value(); got == "/" || got == "" {
+		t.Fatalf("expected enter to accept a slash suggestion, got %q", got)
+	}
+	select {
+	case msg := <-userCh:
+		t.Fatalf("expected suggestion selection not to submit input, got %q", msg)
+	default:
+	}
+}
+
+func TestBackslashEnterAcceptsSlashSuggestionWhenCandidatesExist(t *testing.T) {
+	userCh := make(chan string, 1)
+	app := New(nil, userCh, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	app = next.(App)
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	app = next.(App)
+	if !app.input.HasSuggestions() {
+		t.Fatal("expected slash suggestions to be visible")
+	}
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	app = next.(App)
+
+	if got := app.input.Value(); got == "/" || got == "" {
+		t.Fatalf("expected enter to accept a slash suggestion, got %q", got)
+	}
+	select {
+	case msg := <-userCh:
+		t.Fatalf("expected suggestion selection not to submit input, got %q", msg)
+	default:
+	}
+}
+
+func TestBackslashEnterInsertsNewlineWhenSlashModeHasNoSuggestions(t *testing.T) {
+	userCh := make(chan string, 1)
+	app := New(nil, userCh, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	app = next.(App)
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/nope")})
+	app = next.(App)
+	if app.input.HasSuggestions() {
+		t.Fatal("expected no slash suggestions for unmatched command")
+	}
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'\\'}})
+	app = next.(App)
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	app = next.(App)
+
+	if got := app.input.Value(); got != "/nope\n" {
+		t.Fatalf("expected backslash+enter to insert newline when no suggestions exist, got %q", got)
+	}
+	select {
+	case msg := <-userCh:
+		t.Fatalf("expected backslash+enter not to submit input, got %q", msg)
+	default:
+	}
+}
+
 func TestLargePastedUserMessageRendersFullContent(t *testing.T) {
 	userCh := make(chan string, 1)
 	app := New(nil, userCh, "test", ".", "", "demo-model", 4096)

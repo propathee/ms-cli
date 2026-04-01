@@ -215,7 +215,6 @@ func NewReplay(ch <-chan model.Event, userCh chan<- string, version, workDir, re
 	return app
 }
 
-
 func (a App) waitForEvent() tea.Msg {
 	ev, ok := <-a.eventCh
 	if !ok {
@@ -857,7 +856,23 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, cmd
 
 	case "enter":
-		// Don't process enter if in slash mode (handled above)
+		// HasSuggestions means slash mode currently has visible candidates, so
+		// Enter accepts the current suggestion instead of submitting or newline.
+		if a.input.HasSuggestions() {
+			var cmd tea.Cmd
+			a.input, cmd = a.input.Update(msg)
+			a.resizeActiveLayout()
+			return a, cmd
+		}
+		// ConsumeEscapedEnter turns "\+Enter" into a newline by consuming the
+		// backslash immediately before the cursor.
+		if updated, consumed := a.input.ConsumeEscapedEnter(); consumed {
+			a.input = updated
+			a.resizeActiveLayout()
+			return a, nil
+		}
+		// IsSlashMode can still be true after candidates disappear, so let the
+		// input keep handling Enter inside slash mode instead of submitting.
 		if a.input.IsSlashMode() {
 			var cmd tea.Cmd
 			a.input, cmd = a.input.Update(msg)

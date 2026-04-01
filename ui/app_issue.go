@@ -145,6 +145,23 @@ func (a App) handleIssueDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.resizeActiveLayout()
 		return a, cmd
 	case "enter":
+		// HasSuggestions means slash mode currently has visible candidates, so
+		// Enter accepts the current suggestion instead of submitting or newline.
+		if a.input.HasSuggestions() {
+			var cmd tea.Cmd
+			a.input, cmd = a.input.Update(msg)
+			a.resizeActiveLayout()
+			return a, cmd
+		}
+		// ConsumeEscapedEnter turns "\+Enter" into a newline by consuming the
+		// backslash immediately before the cursor.
+		if updated, consumed := a.input.ConsumeEscapedEnter(); consumed {
+			a.input = updated
+			a.resizeActiveLayout()
+			return a, nil
+		}
+		// IsSlashMode can still be true after candidates disappear, so let the
+		// input keep handling Enter inside slash mode instead of submitting.
 		if a.input.IsSlashMode() {
 			var cmd tea.Cmd
 			a.input, cmd = a.input.Update(msg)

@@ -74,6 +74,144 @@ func TestTextInputCtrlJInsertsNewline(t *testing.T) {
 	}
 }
 
+func TestTextInputConsumeEscapedEnterAtEnd(t *testing.T) {
+	input := NewTextInput()
+	input.Model.SetValue("alpha\\")
+	input.Model.SetCursor(len([]rune("alpha\\")))
+
+	input, consumed := input.ConsumeEscapedEnter()
+	if !consumed {
+		t.Fatal("expected escaped enter to be consumed")
+	}
+	if got := input.Value(); got != "alpha\n" {
+		t.Fatalf("expected escaped enter to replace trailing backslash with newline, got %q", got)
+	}
+	if got := input.Height(); got != 4 {
+		t.Fatalf("expected escaped enter to grow composer height, got %d", got)
+	}
+}
+
+func TestTextInputConsumeEscapedEnterAtCursorInMiddle(t *testing.T) {
+	input := NewTextInput()
+	input.Model.SetValue("ab\\cd")
+	input.Model.SetCursor(3)
+
+	input, consumed := input.ConsumeEscapedEnter()
+	if !consumed {
+		t.Fatal("expected escaped enter to be consumed in the middle of the input")
+	}
+	if got := input.Value(); got != "ab\ncd" {
+		t.Fatalf("expected escaped enter to preserve surrounding text, got %q", got)
+	}
+	row, col, _ := input.cursorPosition()
+	if row != 1 || col != 0 {
+		t.Fatalf("expected cursor to move to the start of the new line, got row=%d col=%d", row, col)
+	}
+}
+
+func TestTextInputConsumeEscapedEnterKeepsCursorOnInsertedLineInMultilineDraft(t *testing.T) {
+	input := NewTextInput()
+	input.Model.SetValue("aaa\\\nbbb\nccc")
+	input.Model.SetCursor(0)
+	input.Model.CursorUp()
+	input.Model.CursorUp()
+	input.Model.SetCursor(len([]rune("aaa\\")))
+
+	input, consumed := input.ConsumeEscapedEnter()
+	if !consumed {
+		t.Fatal("expected escaped enter to be consumed in multiline draft")
+	}
+	if got := input.Value(); got != "aaa\n\nbbb\nccc" {
+		t.Fatalf("expected multiline draft to gain a blank line, got %q", got)
+	}
+
+	row, col, _ := input.cursorPosition()
+	if row != 1 || col != 0 {
+		t.Fatalf("expected cursor on inserted blank line, got row=%d col=%d", row, col)
+	}
+
+	input, _ = input.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	if got := input.Value(); got != "aaa\nx\nbbb\nccc" {
+		t.Fatalf("expected follow-up typing to stay on inserted line, got %q", got)
+	}
+}
+
+func TestTextInputConsumeEscapedEnterConsumesOnlyImmediateBackslash(t *testing.T) {
+	input := NewTextInput()
+	input.Model.SetValue("\\\\")
+	input.Model.SetCursor(2)
+
+	input, consumed := input.ConsumeEscapedEnter()
+	if !consumed {
+		t.Fatal("expected escaped enter to consume the immediate preceding backslash")
+	}
+	if got := input.Value(); got != "\\\n" {
+		t.Fatalf("expected earlier backslash to remain literal, got %q", got)
+	}
+}
+
+func TestTextInputConsumeEscapedEnterReturnsFalseWithoutBackslash(t *testing.T) {
+	input := NewTextInput()
+	input.Model.SetValue("alpha")
+	input.Model.SetCursor(len([]rune("alpha")))
+
+	updated, consumed := input.ConsumeEscapedEnter()
+	if consumed {
+		t.Fatal("expected escaped enter to be ignored when no backslash precedes the cursor")
+	}
+	if got := updated.Value(); got != "alpha" {
+		t.Fatalf("expected input to stay unchanged, got %q", got)
+	}
+}
+
+func TestTextInputBackslashStaysLiteralWhenFollowedByOtherRunes(t *testing.T) {
+	input := NewTextInput()
+
+	input, _ = input.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'\\'}})
+	input, _ = input.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("beta")})
+
+	if got := input.Value(); got != "\\beta" {
+		t.Fatalf("expected backslash to stay literal when next key is not enter, got %q", got)
+	}
+}
+
+func TestTextInputConsumeEscapedEnterPreservesCollapsedPasteValue(t *testing.T) {
+	input := NewTextInput()
+	input = input.SetWidth(60)
+
+	input, _ = input.Update(tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune(largePastedBlock),
+		Paste: true,
+	})
+	input, _ = input.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'\\'}})
+
+	input, consumed := input.ConsumeEscapedEnter()
+	if !consumed {
+		t.Fatal("expected escaped enter to be consumed after collapsed paste summary")
+	}
+	if got := input.Value(); got != largePastedBlock+"\n" {
+		t.Fatalf("expected reconstructed value to preserve raw paste and newline, got %q", got)
+	}
+}
+
+func TestTextInputConsumeEscapedEnterCanRunWhenSlashModeHasNoSuggestions(t *testing.T) {
+	input := newSlashSuggestionInput(3)
+	input.Model.SetValue("/\\")
+	input.Model.SetCursor(len([]rune("/\\")))
+	input.showSuggestions = false
+	input.suggestions = nil
+	input.slashMode = true
+
+	input, consumed := input.ConsumeEscapedEnter()
+	if !consumed {
+		t.Fatal("expected escaped enter to be consumed when slash mode has no suggestions")
+	}
+	if got := input.Value(); got != "/\n" {
+		t.Fatalf("expected escaped enter to insert newline when no suggestions are available, got %q", got)
+	}
+}
+
 func TestTextInputUsesSinglePromptWithContinuationLines(t *testing.T) {
 	input := NewTextInput()
 	input = input.SetWidth(40)

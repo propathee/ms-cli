@@ -94,3 +94,87 @@ func TestIssueDetailComposerSubmitsMultilineNote(t *testing.T) {
 		t.Fatalf("expected composer reset after submit, got %q", got)
 	}
 }
+
+func TestIssueDetailComposerBackslashEnterInsertsNewlineWithoutSubmitting(t *testing.T) {
+	userCh := make(chan string, 1)
+	app := New(nil, userCh, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 28})
+	app = next.(App)
+
+	now := time.Now()
+	next, _ = app.handleEvent(model.Event{
+		Type: model.IssueDetailOpen,
+		IssueView: &model.IssueEventData{
+			ID:    42,
+			Issue: &issuepkg.Issue{ID: 42, Key: "ISSUE-42", Title: "acc failure in migrate", Kind: issuepkg.KindAccuracy, Status: "doing", Lead: "bob", Reporter: "alice", UpdatedAt: now},
+		},
+	})
+	app = next.(App)
+
+	app.input.Model.SetValue("line one\\")
+	app.input.Model.SetCursor(len([]rune("line one\\")))
+	next, _ = app.handleIssueDetailKey(tea.KeyMsg{Type: tea.KeyEnter})
+	app = next.(App)
+
+	if got := app.input.Value(); got != "line one\n" {
+		t.Fatalf("expected backslash+enter to insert newline, got %q", got)
+	}
+	select {
+	case msg := <-userCh:
+		t.Fatalf("expected backslash+enter not to submit issue note, got %q", msg)
+	default:
+	}
+
+	next, _ = app.handleIssueDetailKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line two")})
+	app = next.(App)
+	next, _ = app.handleIssueDetailKey(tea.KeyMsg{Type: tea.KeyEnter})
+	app = next.(App)
+
+	select {
+	case msg := <-userCh:
+		if msg != "/__issue_note ISSUE-42 line one\nline two" {
+			t.Fatalf("expected multiline issue note submit, got %q", msg)
+		}
+	default:
+		t.Fatal("expected multiline issue note submit")
+	}
+}
+
+func TestIssueDetailBackslashEnterAcceptsSlashSuggestionWhenCandidatesExist(t *testing.T) {
+	userCh := make(chan string, 1)
+	app := New(nil, userCh, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 100, Height: 28})
+	app = next.(App)
+
+	now := time.Now()
+	next, _ = app.handleEvent(model.Event{
+		Type: model.IssueDetailOpen,
+		IssueView: &model.IssueEventData{
+			ID:    42,
+			Issue: &issuepkg.Issue{ID: 42, Key: "ISSUE-42", Title: "acc failure in migrate", Kind: issuepkg.KindAccuracy, Status: "doing", Lead: "bob", Reporter: "alice", UpdatedAt: now},
+		},
+	})
+	app = next.(App)
+
+	next, _ = app.handleIssueDetailKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	app = next.(App)
+	if !app.input.HasSuggestions() {
+		t.Fatal("expected slash suggestions to be visible")
+	}
+
+	next, _ = app.handleIssueDetailKey(tea.KeyMsg{Type: tea.KeyEnter})
+	app = next.(App)
+
+	if got := app.input.Value(); got == "/" || got == "" {
+		t.Fatalf("expected enter to accept a slash suggestion, got %q", got)
+	}
+	select {
+	case msg := <-userCh:
+		t.Fatalf("expected suggestion selection not to submit issue input, got %q", msg)
+	default:
+	}
+}
