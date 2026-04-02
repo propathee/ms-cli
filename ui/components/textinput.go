@@ -1,11 +1,14 @@
 package components
 
 import (
+	"reflect"
 	"strings"
 	"unicode"
+	"unsafe"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	rw "github.com/mattn/go-runewidth"
@@ -433,10 +436,21 @@ func (t *TextInput) syncSuggestionWindow() {
 
 func (t *TextInput) syncHeight() {
 	height := t.editorHeight()
-	if t.Model.Height() == height {
+	if t.Model.Height() != height {
+		t.Model.SetHeight(height)
+	}
+	t.resetViewportTop()
+}
+
+func (t *TextInput) resetViewportTop() {
+	field := reflect.ValueOf(&t.Model).Elem().FieldByName("viewport")
+	if !field.IsValid() || field.IsNil() {
 		return
 	}
-	t.Model.SetHeight(height)
+	vp := *(**viewport.Model)(unsafe.Pointer(field.UnsafeAddr()))
+	if vp != nil {
+		vp.GotoTop()
+	}
 }
 
 func (t TextInput) editorHeight() int {
