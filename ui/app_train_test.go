@@ -630,6 +630,36 @@ func TestOverflowMultilinePasteUsesScrollableComposer(t *testing.T) {
 	}
 }
 
+func TestOverflowHistoryRecallUsesScrollableComposer(t *testing.T) {
+	app := New(nil, nil, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 40, Height: 10})
+	app = next.(App)
+
+	app.input = app.input.PushHistory(overflowPastedBlock)
+
+	next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	app = next.(App)
+
+	view := app.View()
+	if strings.Contains(view, "line 01") {
+		t.Fatalf("expected overflow history recall not to stay pinned to the first line, got:\n%s", view)
+	}
+	if !strings.Contains(view, "line 10") {
+		t.Fatalf("expected overflow history recall to keep the last line visible, got:\n%s", view)
+	}
+
+	for i := 0; i < 9; i++ {
+		next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+		app = next.(App)
+	}
+	upView := app.View()
+	if !strings.Contains(upView, "line 01") {
+		t.Fatalf("expected scrolling up after history recall to reveal the first line, got:\n%s", upView)
+	}
+}
+
 func TestUpDoesNotRecallHistoryWhileInsideMultilineComposer(t *testing.T) {
 	app := New(nil, nil, "test", ".", "", "demo-model", 4096)
 	app.bootActive = false

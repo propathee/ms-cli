@@ -266,6 +266,35 @@ func TestTextInputScrollModeKeepsLowerLinesReachable(t *testing.T) {
 	}
 }
 
+func TestTextInputOverflowHistoryRecallShowsLatestRows(t *testing.T) {
+	input := NewTextInput()
+	input = input.SetWidth(24)
+	input = input.SetMaxVisibleRows(4)
+	input = input.PushHistory(overflowPastedBlock)
+
+	input = input.PrevHistory()
+
+	if got := input.Height(); got != 6 {
+		t.Fatalf("expected capped composer block height 6 after history recall, got %d", got)
+	}
+
+	view := input.View()
+	if strings.Contains(view, "line 01") {
+		t.Fatalf("expected overflow history recall not to stay pinned to the first line, got %q", view)
+	}
+	if !strings.Contains(view, "line 10") {
+		t.Fatalf("expected overflow history recall to keep the last line visible, got %q", view)
+	}
+
+	for i := 0; i < 9; i++ {
+		input, _ = input.Update(tea.KeyMsg{Type: tea.KeyUp})
+	}
+	upView := input.View()
+	if !strings.Contains(upView, "line 01") {
+		t.Fatalf("expected scrolling up after history recall to reveal the first line, got %q", upView)
+	}
+}
+
 func TestTextInputHeightGrowsForSoftWrappedLine(t *testing.T) {
 	input := NewTextInput()
 	input = input.SetWidth(11)

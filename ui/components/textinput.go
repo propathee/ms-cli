@@ -234,6 +234,7 @@ func (t TextInput) PrevHistory() TextInput {
 	}
 	t.Model.SetValue(t.history[t.historyIndex])
 	t.syncHeight()
+	t.syncViewportForCurrentValue()
 	t.showSuggestions = false
 	t.slashMode = false
 	t.suggestions = nil
@@ -250,6 +251,7 @@ func (t TextInput) NextHistory() TextInput {
 		t.historyIndex++
 		t.Model.SetValue(t.history[t.historyIndex])
 		t.syncHeight()
+		t.syncViewportForCurrentValue()
 		t.showSuggestions = false
 		t.slashMode = false
 		t.suggestions = nil
@@ -259,6 +261,7 @@ func (t TextInput) NextHistory() TextInput {
 	t.historyIndex = -1
 	t.Model.SetValue(t.historyDraft)
 	t.syncHeight()
+	t.syncViewportForCurrentValue()
 	t.historyDraft = ""
 	t.showSuggestions = false
 	t.slashMode = false
@@ -464,6 +467,12 @@ func (t *TextInput) syncHeight() {
 	}
 	if t.isExpandedMode() {
 		t.resetViewportTop()
+	}
+}
+
+func (t *TextInput) syncViewportForCurrentValue() {
+	if !t.isExpandedMode() {
+		t.resetViewportBottom()
 	}
 }
 
