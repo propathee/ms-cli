@@ -10,6 +10,7 @@ import (
 
 const largePastedBlock = "line 01\nline 02\nline 03\nline 04\nline 05\nline 06\nline 07\nline 08\n"
 const normalPastedBlock = "The first line.\nThe second line.\nThe third line.\nThe fourth line."
+const overflowPastedBlock = "line 01\nline 02\nline 03\nline 04\nline 05\nline 06\nline 07\nline 08\nline 09\nline 10"
 
 func TestTrainFixActionClearsStaleButtonAndKeepsCompletionMessage(t *testing.T) {
 	app := New(nil, nil, "test", ".", "", "demo-model", 4096)
@@ -584,6 +585,48 @@ func TestNormalMultilinePasteSubmitPreservesSingleHistoryEntry(t *testing.T) {
 	app.input = app.input.PrevHistory()
 	if got := app.input.Value(); got != normalPastedBlock {
 		t.Fatalf("expected history to keep one complete multiline entry, got %q", got)
+	}
+}
+
+func TestOverflowMultilinePasteUsesScrollableComposer(t *testing.T) {
+	app := New(nil, nil, "test", ".", "", "demo-model", 4096)
+	app.bootActive = false
+
+	next, _ := app.Update(tea.WindowSizeMsg{Width: 40, Height: 10})
+	app = next.(App)
+
+	next, _ = app.handleKey(tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune(overflowPastedBlock),
+		Paste: true,
+	})
+	app = next.(App)
+
+	if app.input.Height() >= 10 {
+		t.Fatalf("expected composer to stay capped within the viewport, got height %d", app.input.Height())
+	}
+
+	initialView := app.View()
+	if !strings.Contains(initialView, "line 10") {
+		t.Fatalf("expected app view to keep the last overflow line visible, got:\n%s", initialView)
+	}
+
+	for i := 0; i < 9; i++ {
+		next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+		app = next.(App)
+	}
+	upView := app.View()
+	if !strings.Contains(upView, "line 01") {
+		t.Fatalf("expected scrolling up to reveal the first overflow line, got:\n%s", upView)
+	}
+
+	for i := 0; i < 9; i++ {
+		next, _ = app.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+		app = next.(App)
+	}
+	downView := app.View()
+	if !strings.Contains(downView, "line 10") {
+		t.Fatalf("expected scrolling down to reveal the last overflow line again, got:\n%s", downView)
 	}
 }
 

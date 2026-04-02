@@ -48,6 +48,7 @@ type TextInput struct {
 	historyIndex     int
 	historyDraft     string
 	width            int
+	maxVisibleRows   int
 }
 
 // NewTextInput creates a focused multiline composer with a prompt.
@@ -126,8 +127,22 @@ func (t TextInput) SetWidth(width int) TextInput {
 	return t
 }
 
+// SetMaxVisibleRows limits the composer editor area before textarea scrolling
+// takes over. Non-positive values remove the cap.
+func (t TextInput) SetMaxVisibleRows(rows int) TextInput {
+	if rows <= 0 {
+		t.maxVisibleRows = 0
+	} else {
+		t.maxVisibleRows = rows
+	}
+	t.syncHeight()
+	return t
+}
+
 // Update handles key events.
 func (t TextInput) Update(msg tea.Msg) (TextInput, tea.Cmd) {
+	beforeValue := t.Model.Value()
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		t.maybeGrowHeightBeforeUpdate(msg)
@@ -179,6 +194,9 @@ func (t TextInput) Update(msg tea.Msg) (TextInput, tea.Cmd) {
 	m, cmd := t.Model.Update(msg)
 	t.Model = m
 	t.syncHeight()
+	if len([]rune(t.Model.Value())) > len([]rune(beforeValue)) && !t.isExpandedMode() {
+		t.resetViewportBottom()
+	}
 
 	// Update suggestions based on current input
 	t.updateSuggestions()
@@ -353,9 +371,14 @@ func (t TextInput) View() string {
 
 // Height returns the total height including suggestions area.
 func (t TextInput) Height() int {
-	height := t.editorHeight() + 2
+	return t.editorHeight() + t.ReservedHeight()
+}
+
+// ReservedHeight returns composer chrome outside the editor rows.
+func (t TextInput) ReservedHeight() int {
+	height := 2
 	if t.slashMode {
-		return height + maxVisibleSuggestions
+		height += maxVisibleSuggestions
 	}
 	return height
 }
@@ -439,7 +462,9 @@ func (t *TextInput) syncHeight() {
 	if t.Model.Height() != height {
 		t.Model.SetHeight(height)
 	}
-	t.resetViewportTop()
+	if t.isExpandedMode() {
+		t.resetViewportTop()
+	}
 }
 
 func (t *TextInput) resetViewportTop() {
@@ -453,12 +478,44 @@ func (t *TextInput) resetViewportTop() {
 	}
 }
 
-func (t TextInput) editorHeight() int {
-	lines := t.visibleLineCountForValue(t.Model.Value())
-	if lines < minComposerRows {
-		return minComposerRows
+func (t *TextInput) resetViewportBottom() {
+	field := reflect.ValueOf(&t.Model).Elem().FieldByName("viewport")
+	if !field.IsValid() || field.IsNil() {
+		return
 	}
-	return lines
+	vp := *(**viewport.Model)(unsafe.Pointer(field.UnsafeAddr()))
+	if vp != nil {
+		offset := t.contentVisibleRows() - t.editorHeight()
+		if offset < 0 {
+			offset = 0
+		}
+		vp.YOffset = offset
+	}
+}
+
+func (t TextInput) editorHeight() int {
+	return t.clampEditorRows(t.contentVisibleRows())
+}
+
+func (t TextInput) contentVisibleRows() int {
+	return t.visibleLineCountForValue(t.Model.Value())
+}
+
+func (t TextInput) isExpandedMode() bool {
+	if t.maxVisibleRows <= 0 {
+		return true
+	}
+	return t.contentVisibleRows() <= t.maxVisibleRows
+}
+
+func (t TextInput) clampEditorRows(rows int) int {
+	if rows < minComposerRows {
+		rows = minComposerRows
+	}
+	if t.maxVisibleRows > 0 && rows > t.maxVisibleRows {
+		return t.maxVisibleRows
+	}
+	return rows
 }
 
 func (t TextInput) visibleLineCountForValue(value string) int {
@@ -482,7 +539,7 @@ func (t *TextInput) maybeGrowHeightBeforeUpdate(msg tea.KeyMsg) {
 	if !ok {
 		return
 	}
-	nextHeight := t.visibleLineCountForValue(nextValue)
+	nextHeight := t.clampEditorRows(t.visibleLineCountForValue(nextValue))
 	if nextHeight > t.Model.Height() {
 		t.Model.SetHeight(nextHeight)
 	}

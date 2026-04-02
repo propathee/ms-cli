@@ -13,6 +13,7 @@ import (
 
 const largePastedBlock = "line 01\nline 02\nline 03\nline 04\nline 05\nline 06\nline 07\nline 08\n"
 const normalPastedBlock = "The first line.\nThe second line.\nThe third line.\nThe fourth line."
+const overflowPastedBlock = "line 01\nline 02\nline 03\nline 04\nline 05\nline 06\nline 07\nline 08\nline 09\nline 10"
 
 func TestTextInputHistoryRecall(t *testing.T) {
 	input := NewTextInput()
@@ -222,6 +223,46 @@ func TestTextInputKeepsAllLinesVisibleAfterMovingCursorUp(t *testing.T) {
 	}
 	if !strings.Contains(view, composerContinue+"The fourth line.") {
 		t.Fatalf("expected last line to stay visible after moving up, got %q", view)
+	}
+}
+
+func TestTextInputScrollModeKeepsLowerLinesReachable(t *testing.T) {
+	input := NewTextInput()
+	input = input.SetWidth(24)
+	input = input.SetMaxVisibleRows(4)
+
+	input, _ = input.Update(tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune(overflowPastedBlock),
+		Paste: true,
+	})
+
+	if got := input.Height(); got != 6 {
+		t.Fatalf("expected capped composer block height 6, got %d", got)
+	}
+
+	initialView := input.View()
+	if strings.Contains(initialView, "line 01") {
+		t.Fatalf("expected overflow composer not to stay pinned to the first line, got %q", initialView)
+	}
+	if !strings.Contains(initialView, "line 10") {
+		t.Fatalf("expected overflow composer to keep the cursor line visible, got %q", initialView)
+	}
+
+	for i := 0; i < 9; i++ {
+		input, _ = input.Update(tea.KeyMsg{Type: tea.KeyUp})
+	}
+	upView := input.View()
+	if !strings.Contains(upView, "line 01") {
+		t.Fatalf("expected scrolling up to reveal the first line, got %q", upView)
+	}
+
+	for i := 0; i < 9; i++ {
+		input, _ = input.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	downView := input.View()
+	if !strings.Contains(downView, "line 10") {
+		t.Fatalf("expected scrolling down to reveal the last line again, got %q", downView)
 	}
 }
 

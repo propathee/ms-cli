@@ -215,7 +215,6 @@ func NewReplay(ch <-chan model.Event, userCh chan<- string, version, workDir, re
 	return app
 }
 
-
 func (a App) waitForEvent() tea.Msg {
 	ev, ok := <-a.eventCh
 	if !ok {
@@ -252,6 +251,20 @@ func (a App) chatHeight() int {
 		return 1
 	}
 	return h
+}
+
+func (a App) maxComposerEditorRows() int {
+	maxInputHeight := a.height - a.persistentTopBarHeight() - chatLineHeight - hintBarHeight
+	maxInputHeight -= a.activeHUDHeight()
+	maxInputHeight -= a.queueBannerHeight()
+	maxInputHeight -= a.bottomPaddingHeight()
+	maxInputHeight -= 1 // keep at least one chat row visible
+
+	rows := maxInputHeight - a.input.ReservedHeight()
+	if rows < 1 {
+		return 1
+	}
+	return rows
 }
 
 func (a App) desiredChatHeight(contentLines int) int {
@@ -361,6 +374,7 @@ func (a *App) resizeInput() {
 		inputWidth = 1
 	}
 	a.input = a.input.SetWidth(inputWidth)
+	a.input = a.input.SetMaxVisibleRows(a.maxComposerEditorRows())
 }
 
 func (a *App) resizeActiveLayout() {
